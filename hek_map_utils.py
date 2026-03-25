@@ -12,20 +12,158 @@ Provides three layers of abstraction:
        Distances are in metres; angles are in decimal degrees.
 
   3. Geodetic / great-circle geometry  (GeoVector, GeoPoint)
-       Wraps the Vincenty direct/inverse formulae (via geodepy) so that
+       Uses the Vincenty direct/inverse formulae (pure-Python) so that
        arithmetic on geographic coordinates (lat/long in decimal degrees)
        works with the same operator syntax as the flat-plane classes.
        Distances are in kilometres; bearings are clockwise from true north.
 
-Dependencies: geodepy
+Dependencies: none (stdlib only)
 """
 
 import cmath
-from math import degrees, radians
+from math import (
+    atan, atan2, cos, degrees, fabs, radians, sin, sqrt, tan, pi, asin,
+)
+from rich.traceback import install; install()
 
-from geodepy.convert import DMSAngle as Angle
-from geodepy.convert import dec2dms as toAngle
-from geodepy.geodesy import vincdir, vincinv
+
+# ---------------------------------------------------------------------------
+# WGS-84 ellipsoid parameters
+# ---------------------------------------------------------------------------
+
+_WGS84_A = 6_378_137.0          # semi-major axis (m)
+_WGS84_F = 1 / 298.257223563    # flattening
+_WGS84_B = _WGS84_A * (1 - _WGS84_F)  # semi-minor axis (m)
+
+
+# ---------------------------------------------------------------------------
+# Vincenty direct formula
+# ---------------------------------------------------------------------------
+
+def _vincdir(lat1_deg: float, lon1_deg: float, az1_deg: float, dist_m: float):
+    """Vincenty direct: given a start point, azimuth, and distance, return the
+    end point and reverse azimuth.
+
+    Returns:
+        (lat2_deg, lon2_deg, az2_deg)  — all in decimal degrees.
+    """
+    a, b, f = _WGS84_A, _WGS84_B, _WGS84_F
+    lat1 = radians(lat1_deg)
+    lon1 = radians(lon1_deg)
+    az1  = radians(az1_deg)
+
+    tan_U1 = (1 - f) * tan(lat1)
+    cos_U1 = 1 / sqrt(1 + tan_U1**2)
+    sin_U1 = tan_U1 * cos_U1
+
+    sin_az1, cos_az1 = sin(az1), cos(az1)
+    sigma1 = atan2(tan_U1, cos_az1)
+    sin_alpha = cos_U1 * sin_az1
+    cos2_alpha = 1 - sin_alpha**2
+    u2 = cos2_alpha * (a**2 - b**2) / b**2
+    A_ = 1 + u2 / 16384 * (4096 + u2 * (-768 + u2 * (320 - 175 * u2)))
+    B_ = u2 / 1024 * (256 + u2 * (-128 + u2 * (74 - 47 * u2)))
+
+    sigma = dist_m / (b * A_)
+    for _ in range(100):
+        cos2sm = cos(2 * sigma1 + sigma)
+        sin_sigma = sin(sigma)
+        cos_sigma = cos(sigma)
+        d_sigma = B_ * sin_sigma * (
+            cos2sm + B_ / 4 * (
+                cos_sigma * (-1 + 2 * cos2sm**2)
+                - B_ / 6 * cos2sm * (-3 + 4 * sin_sigma**2) * (-3 + 4 * cos2sm**2)
+            )
+        )
+        sigma_new = dist_m / (b * A_) + d_sigma
+        if fabs(sigma_new - sigma) < 1e-12:
+            sigma = sigma_new
+            break
+        sigma = sigma_new
+
+    cos2sm = cos(2 * sigma1 + sigma)
+    sin_sigma, cos_sigma = sin(sigma), cos(sigma)
+
+    lat2 = atan2(
+        sin_U1 * cos_sigma + cos_U1 * sin_sigma * cos_az1,
+        (1 - f) * sqrt(sin_alpha**2 + (sin_U1 * sin_sigma - cos_U1 * cos_sigma * cos_az1)**2),
+    )
+    lam = atan2(
+        sin_sigma * sin_az1,
+        cos_U1 * cos_sigma - sin_U1 * sin_sigma * cos_az1,
+    )
+    C = f / 16 * cos2_alpha * (4 + f * (4 - 3 * cos2_alpha))
+    L = lam - (1 - C) * f * sin_alpha * (
+        sigma + C * sin_sigma * (cos2sm + C * cos_sigma * (-1 + 2 * cos2sm**2))
+    )
+    lon2 = lon1 + L
+    az2 = atan2(sin_alpha, -sin_U1 * sin_sigma + cos_U1 * cos_sigma * cos_az1)
+
+    return degrees(lat2), degrees(lon2), (degrees(az2) + 360) % 360
+
+
+# ---------------------------------------------------------------------------
+# Vincenty inverse formula
+# ---------------------------------------------------------------------------
+
+def _vincinv(lat1_deg: float, lon1_deg: float, lat2_deg: float, lon2_deg: float):
+    """Vincenty inverse: given two points, return the geodetic distance and
+    forward/reverse azimuths.
+
+    Returns:
+        (dist_m, az1_deg, az2_deg)
+    """
+    a, b, f = _WGS84_A, _WGS84_B, _WGS84_F
+
+    if fabs(lat1_deg - lat2_deg) < 1e-10 and fabs(lon1_deg - lon2_deg) < 1e-10:
+        return 0.0, 0.0, 0.0  # coincident points
+
+    u1 = atan((1 - f) * tan(radians(lat1_deg)))
+    u2 = atan((1 - f) * tan(radians(lat2_deg)))
+
+    lon = radians(lon2_deg - lon1_deg)
+    omega = lon
+
+    alpha = sigma = cos2sm = 0.0
+    for _ in range(1000):
+        sin_sigma = sqrt(
+            (cos(u2) * sin(lon))**2
+            + (cos(u1) * sin(u2) - sin(u1) * cos(u2) * cos(lon))**2
+        )
+        cos_sigma = sin(u1) * sin(u2) + cos(u1) * cos(u2) * cos(lon)
+        sigma = atan2(sin_sigma, cos_sigma)
+        # asin clamps to principal value, preventing sign-flip oscillation
+        # near antipodal equatorial points
+        alpha = asin((cos(u1) * cos(u2) * sin(lon)) / sin_sigma)
+        cos2sm = cos(sigma) - 2 * sin(u1) * sin(u2) / cos(alpha)**2
+        c = f / 16 * cos(alpha)**2 * (4 + f * (4 - 3 * cos(alpha)**2))
+        new_lon = omega + (1 - c) * f * sin(alpha) * (
+            sigma + c * sin(sigma) * (
+                cos2sm + c * cos(sigma) * (-1 + 2 * cos2sm**2)
+            )
+        )
+        if fabs(new_lon - lon) < 1e-12:
+            lon = new_lon
+            break
+        lon = new_lon
+
+    u2_sq = cos(alpha)**2 * (a**2 - b**2) / b**2
+    A_ = 1 + u2_sq / 16384 * (4096 + u2_sq * (-768 + u2_sq * (320 - 175 * u2_sq)))
+    B_ = u2_sq / 1024 * (256 + u2_sq * (-128 + u2_sq * (74 - 47 * u2_sq)))
+    d_sigma = B_ * sin(sigma) * (
+        cos2sm + B_ / 4 * (
+            cos(sigma) * (-1 + 2 * cos2sm**2)
+            - B_ / 6 * cos2sm * (-3 + 4 * sin(sigma)**2) * (-3 + 4 * cos2sm**2)
+        )
+    )
+    dist_m = b * A_ * (sigma - d_sigma)
+
+    az1 = degrees(atan2(cos(u2) * sin(lon), cos(u1) * sin(u2) - sin(u1) * cos(u2) * cos(lon)))
+    if az1 < 0:
+        az1 += 360
+    az2 = degrees(atan2(cos(u1) * sin(lon), -sin(u1) * cos(u2) + cos(u1) * sin(u2) * cos(lon))) + 180
+
+    return dist_m, az1, az2
 
 
 # ---------------------------------------------------------------------------
@@ -391,14 +529,18 @@ class GeoPoint(tuple):
     def __add__(self, vector: GeoVector) -> GeoPoint:
         """Displace this point along *vector* using the Vincenty direct formula."""
         distance, bearing_radians = cmath.polar(vector)
-        lat, long, _ = vincdir(
+        lat, long, _ = _vincdir(
             self.latitude, self.longitude, degrees(bearing_radians), distance
         )
+        # Wrap longitude to (-180, 180]
+        long = (long + 180) % 360 - 180
+        if long == -180:
+            long = 180.0
         return GeoPoint(lat, long)
 
     def __sub__(self, other: GeoPoint) -> GeoVector:
         """Return the geodetic displacement from *other* to *self* (Vincenty inverse)."""
-        dist, _fwd_az, rev_az = vincinv(
+        dist, _fwd_az, rev_az = _vincinv(
             self.latitude,
             self.longitude,
             other.latitude,
