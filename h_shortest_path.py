@@ -9,7 +9,7 @@ a policy (best action in every state).
 """
 
 from math import log
-from typing import Any, Generator, Iterable
+from typing import Any, Generator
 
 from stdlib import ANY, FifoQueue, LifoQueue, PriorityQueue
 
@@ -214,110 +214,73 @@ class Optimizer:
         return []
 
     # ------------------------------------------------------------------
-    # Longest-path helpers
+    # Longest-path
     # ------------------------------------------------------------------
-
-    def longest_path_min(
-        self,
-        end_state: Any,
-        excluded_lengths: Iterable[int] = (),
-        offset: float = 1_000,
-    ):
-        """
-        Internal helper for :meth:`longest_path`.
-        Negates revenues so a shortest-path search finds the maximum.
-
-        Parameters
-        ----------
-        end_state:
-            Target state.
-        excluded_lengths:
-            Path lengths to skip at the goal (used to iterate over progressively
-            longer solutions).
-        offset:
-            Must exceed the maximum absolute revenue per step.
-        """
-        excluded = set(excluded_lengths)
-        fringe = PriorityQueue((0, [], self.start_state))
-        visited: dict = {}  # state → best real revenue seen
-        solution = (0, None)
-
-        while fringe:
-            cost, path, current_state = fringe.pop()
-            real_revenue = len(path) * offset - cost
-
-            prev_best = visited.get(current_state)
-            if prev_best is not None and real_revenue <= prev_best:
-                continue
-            visited[current_state] = real_revenue
-
-            if current_state == end_state:
-                return real_revenue, path
-
-            for new_decision, revenue in self.get_next_decisions(current_state):
-                new_path = path + [new_decision]
-                next_state = self.get_state(new_path)
-                cost_step = -revenue + offset
-                assert cost_step > 0, (
-                    f"Step revenue {revenue} >= offset {offset}. "
-                    "Increase the offset parameter."
-                )
-                new_cost = cost + cost_step
-                new_real = len(new_path) * offset - new_cost
-
-                penalty = (
-                    100_000
-                    if len(new_path) in excluded and next_state == end_state
-                    else 0
-                )
-                new_cost += penalty
-
-                prev = visited.get(next_state)
-                if prev is None or new_real > prev:
-                    fringe.push((new_cost, new_path, next_state))
-
-        return solution
 
     def longest_path(
         self,
         start_state: Any,
         end_state: Any,
         max_path_length: int = 1_000,
-        offset: float = 1_000,
-    ):
+    ) -> tuple[float, list | None]:
         """
-        Find the longest (highest-revenue) path from *start_state* to *end_state*.
+        Find the path from *start_state* to *end_state* with the highest
+        total revenue (sum of step revenues returned by ``get_next_decisions``).
 
-        Uses repeated calls to :meth:`longest_path_min`, each time excluding
-        the previous solution's length, until no longer path exists.
+        Uses a max-revenue-first search.  The visited table is keyed on
+        ``(state, path_length)`` so that a state reached at depth *d* with
+        inferior revenue is pruned, but the same state reached at a different
+        depth is explored independently.  This correctly handles cyclic graphs
+        while still pruning dominated sub-paths.
 
         Parameters
         ----------
         max_path_length:
-            Hard cap on path length to prevent infinite loops on cyclic graphs.
-        offset:
-            Passed to :meth:`longest_path_min`; must exceed max step revenue.
+            Hard cap on path length to prevent infinite expansion on cyclic
+            graphs.  Increase if your problem has very long optimal paths.
+
+        Returns
+        -------
+        ``(revenue, path)`` for the best solution, or ``(0, None)`` if no
+        path to *end_state* exists.
         """
         self.start_state = start_state
-        revenue, path = self.longest_path_min(end_state, offset=offset)
-        if path is None:
+        best_revenue: float | None = None
+        best_path: list | None = None
+
+        # Fringe: (-revenue, path_length, path, state).
+        # Negating revenue lets PriorityQueue (min-heap) act as a max-heap.
+        fringe = PriorityQueue((0, 0, [], start_state))
+
+        # visited[(state, path_length)] → best revenue seen so far.
+        # Prune any revisit that cannot improve on the recorded revenue.
+        visited: dict[tuple, float] = {}
+        NEG_INF = float("-inf")
+
+        while fringe:
+            neg_rev, path_length, path, current_state = fringe.pop()
+            revenue = -neg_rev
+
+            key = (current_state, path_length)
+            if visited.get(key, NEG_INF) >= revenue:
+                continue
+            visited[key] = revenue
+
+            if current_state == end_state and path_length > 0:
+                if best_revenue is None or revenue > best_revenue:
+                    best_revenue, best_path = revenue, path
+
+            if path_length < max_path_length:
+                for new_decision, step_rev in self.get_next_decisions(current_state):
+                    new_path = path + [new_decision]
+                    next_state = self.get_state(new_path)
+                    new_rev = revenue + step_rev
+                    new_len = path_length + 1
+                    if visited.get((next_state, new_len), NEG_INF) < new_rev:
+                        fringe.push((-new_rev, new_len, new_path, next_state))
+
+        if best_path is None:
             return 0, None
-
-        excluded = {len(path)}
-        best_revenue, best_path = revenue, path
-
-        while True:
-            new_revenue, new_path = self.longest_path_min(
-                end_state, excluded_lengths=excluded, offset=offset
-            )
-            if new_path is None or len(new_path) <= len(best_path):
-                break
-            if len(new_path) > max_path_length:
-                break
-            excluded.add(len(new_path))
-            if new_revenue > best_revenue:
-                best_revenue, best_path = new_revenue, new_path
-
         return best_revenue, best_path
 
 
