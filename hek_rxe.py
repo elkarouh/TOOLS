@@ -56,16 +56,29 @@ def _add_grouping(pattern: 'str | rxe') -> str:
     A pattern is considered atomic (needs no wrapping) when it is:
     - a single (optionally escaped) character: ``a``, ``\\.``
     - already a character class: ``[a-z]``
-    - already a group: ``(…)``
+    - already a group whose closing ``)`` matches the opening ``(``
     """
-    _no_grouping_needed = (
-        r"(?P<char>^\\?.$)"
-        r"|(?P<square>^\[(?:[^\n\[]|\\\[)*[^\\]\]$)"
-        r"|(?P<braces>^\((?:[^\n\(]|\\\()*[^\\]\)$)"
-    )
     s = str(pattern)
-    if re.match(_no_grouping_needed, s):
+    # Single char or escaped char (e.g. 'a', '\\.', '\d')
+    if re.match(r'^\\?.{1}$', s):
         return s
+    # Character class [...] — must end with unescaped ]
+    if s.startswith('[') and s.endswith(']') and not s.endswith('\\]'):
+        return s
+    # Group (...) — verify the opening ( is closed by the final )
+    if s.startswith('(') and s.endswith(')') and not s.endswith('\\)'):
+        # Walk the string tracking paren depth; if depth hits 0 before the
+        # last char, the outer parens do not span the entire string.
+        depth = 0
+        for i, c in enumerate(s):
+            if c == '(' and (i == 0 or s[i - 1] != '\\'):
+                depth += 1
+            elif c == ')' and (i == 0 or s[i - 1] != '\\'):
+                depth -= 1
+                if depth == 0 and i < len(s) - 1:
+                    break  # outer group closed early — needs wrapping
+        else:
+            return s  # outer parens span the whole string
     return '(?:' + s + ')'
 
 
@@ -106,7 +119,33 @@ class MatchObject:
 
     def __getitem__(self, group: 'int | str') -> str:
         """Return a captured group by position (int) or name (str)."""
+        if self._match is None:
+            raise ValueError("No match")
         return self._match[group]
+
+    def group(self, *args):
+        """Return one or more subgroups of the match."""
+        return self._match.group(*args)
+
+    def groups(self, default=None):
+        """Return a tuple of all subgroups."""
+        return self._match.groups(default)
+
+    def groupdict(self, default=None):
+        """Return a dict of all named subgroups."""
+        return self._match.groupdict(default)
+
+    def start(self, group=0):
+        """Return the start index of the match (or a group)."""
+        return self._match.start(group)
+
+    def end(self, group=0):
+        """Return the end index of the match (or a group)."""
+        return self._match.end(group)
+
+    def span(self, group=0):
+        """Return the (start, end) span of the match (or a group)."""
+        return self._match.span(group)
 
     def __getattr__(self, name: str) -> object:
         """Expose named capture groups and ``re.Match`` attributes transparently."""
@@ -176,6 +215,10 @@ class rxe:
         """Like ``sub``, but also return the number of substitutions made."""
         return re.subn(self.pattern, repl, string, *args)
 
+    def fullmatch(self, string: str, *args) -> MatchObject:
+        """Match the pattern against the entire *string*; return a :class:`MatchObject`."""
+        return MatchObject(re.fullmatch(self.pattern, string, *args))
+
     # -- composition ---------------------------------------------------------
 
     def _raw_add(self, extra_pattern: str, left: bool = False) -> 'rxe':
@@ -218,7 +261,15 @@ class rxe:
                 "Use Either() for alternation between multi-character patterns."
             )
 
-        self_part = self.pattern[1:-1] if self.pattern.startswith('[') else self.pattern
+        if self.pattern.startswith('['):
+            self_part = self.pattern[1:-1]      # strip outer brackets
+        elif self.pattern.startswith('\\') or len(self.pattern) == 1:
+            self_part = self.pattern            # shorthand or literal char
+        else:
+            raise TypeError(
+                f"Cannot build a character class from pattern {self.pattern!r}. "
+                "Use Either() for alternation between multi-character patterns."
+            )
         return rxe('[' + self_part + other_part + ']')
 
     def __invert__(self) -> 'rxe':
@@ -428,7 +479,8 @@ DIGIT = DIGITS      = rxe(r'\d')
 ALPHANUMERIC        = rxe(r'\w')
 WS = WHITESPACE     = rxe(r'\s')
 LETTER = LETTERS    = rxe(r'[a-zA-Z]')
-UPPERCASE           = rxe(r'[A-Z0-9]')
+UPPERCASE           = rxe(r'[A-Z]')
+LOWERCASE           = rxe(r'[a-z]')
 DOT                 = rxe(r'\.')
 
 #: Plain-string constants — usable directly in ``+`` concatenation.
@@ -468,7 +520,7 @@ IDENTIFIER = (
 UPPERCASE_IDENTIFIER = (
     WORDBOUNDARY
     + (UPPERCASE | '_')
-    + ZeroOrMore(UPPERCASE | '_')
+    + ZeroOrMore(UPPERCASE | DIGIT | '_')
     + WORDBOUNDARY
 )
 
@@ -559,8 +611,11 @@ def _split_on(delimiter: 'rxe | str', line: str, exclusions: list[rxe]) -> list[
     Each element of *exclusions* is a pattern whose matches are skipped over
     using ``(*SKIP)(*F)`` before the delimiter is tried.
     """
+    base = rxe(_get_pattern(delimiter)) + ZeroOrMore(WHITESPACE)
+    if not exclusions:
+        return [el for el in base.split(line) if el is not None]
     skip = Either(*exclusions) if len(exclusions) > 1 else exclusions[0]
-    pattern = (rxe(_get_pattern(delimiter)) + ZeroOrMore(WHITESPACE)).filter_matches(skip)
+    pattern = base.filter_matches(skip)
     return [el for el in pattern.split(line) if el is not None]
 
 
@@ -729,5 +784,150 @@ if __name__ == '__main__':
     assert m, "VAR_DECL did not match"
     print(f"name={m[1]!r}  type={m[2]!r}")
     print(VAR_DECL.sub(lambda m: f'{m[1].rstrip()}:"{m[2].lstrip()}"', LINE))
+
+    # -- fullmatch -----------------------------------------------------------
+    print("\n=== fullmatch ===")
+    word = OneOrMore(LETTER)
+    assert word.fullmatch('hello'),        "fullmatch should hit"
+    assert not word.fullmatch('hello123'), "fullmatch should miss (has digits)"
+    assert not word.fullmatch(''),         "fullmatch should miss (empty)"
+    print("fullmatch: OK")
+
+    # -- MatchObject span / start / end / groups / groupdict -----------------
+    print("\n=== MatchObject span/start/end/groups/groupdict ===")
+    pat = Group('A', OneOrMore(LETTER)) + '-' + Group('B', OneOrMore(DIGIT))
+    m = pat.search('foo abc-123 bar')
+    assert m,                        "pat should match"
+    assert m.A == 'abc'
+    assert m.B == '123'
+    assert m.group(1) == 'abc'
+    assert m.group(2) == '123'
+    assert m.groups() == ('abc', '123')
+    assert m.groupdict() == {'A': 'abc', 'B': '123'}
+    assert m.start() == 4
+    assert m.end()   == 11
+    assert m.span()  == (4, 11)
+    assert m.start('A') == 4
+    assert m.end('B')   == 11
+    assert m.span('A')  == (4, 7)
+    print("span/start/end/groups/groupdict: OK")
+
+    # -- __or__ raises on multi-char rxe -------------------------------------
+    print("\n=== __or__ type error ===")
+    try:
+        _ = rxe('abc') | rxe('def')   # multi-char, not a shorthand or class
+        assert False, "should have raised TypeError"
+    except TypeError:
+        pass
+    print("__or__ TypeError: OK")
+
+    # -- double negation on character classes --------------------------------
+    print("\n=== double negation ===")
+    # Shorthand negations are one-way (no \\D → \\d mapping), but
+    # character classes support round-trip negation.
+    neg_letter = ~LETTER                     # [^a-zA-Z]
+    assert neg_letter.pattern == '[^a-zA-Z]'
+    pos_letter = ~neg_letter                 # back to [a-zA-Z]
+    assert pos_letter.pattern == '[a-zA-Z]'
+    print("double negation: OK")
+
+    # -- LOWERCASE / UPPERCASE constants ------------------------------------
+    print("\n=== LOWERCASE / UPPERCASE ===")
+    assert LOWERCASE.match('a') and not LOWERCASE.match('A')
+    assert UPPERCASE.match('Z') and not UPPERCASE.match('z')
+    assert not UPPERCASE.match('5'),  "UPPERCASE should not match digits"
+    print("LOWERCASE / UPPERCASE: OK")
+
+    # -- UPPERCASE_IDENTIFIER includes digits in body -----------------------
+    print("\n=== UPPERCASE_IDENTIFIER ===")
+    assert UPPERCASE_IDENTIFIER.search('MY_CONST_123'), "should match ALL_CAPS with digits"
+    assert not UPPERCASE_IDENTIFIER.search('mixedCase'), "should not match camelCase"
+    print("UPPERCASE_IDENTIFIER: OK")
+
+    # -- preceded_by / followed_by -------------------------------------------
+    print("\n=== lookaround ===")
+    word_after_hash = OneOrMore(LETTER).preceded_by('#')
+    assert word_after_hash.search('#tag')
+    assert not word_after_hash.search('tag')
+
+    word_before_bang = OneOrMore(LETTER).followed_by('!')
+    assert word_before_bang.search('hello!')
+    assert not word_before_bang.search('hello.')
+
+    not_after_at = OneOrMore(LETTER).not_preceded_by('@')
+    assert not_after_at.search('hello')
+
+    not_before_dot = OneOrMore(DIGIT).not_followed_by('.')
+    assert not_before_dot.search('42,')
+    print("lookaround: OK")
+
+    # -- lazy / possessive modifiers -----------------------------------------
+    print("\n=== lazy / possessive ===")
+    greedy = ZeroOrMore(ANYCHAR)
+    lazy_p = ZeroOrMore(ANYCHAR).lazy()
+    assert greedy.pattern.endswith('*')
+    assert lazy_p.pattern.endswith('*?')
+    poss_p = ZeroOrMore(ANYCHAR).possessive()
+    assert poss_p.pattern.endswith('*+')
+    print("lazy / possessive: OK")
+
+    # -- split_on_colon ------------------------------------------------------
+    print("\n=== split_on_colon ===")
+    LINE = 'key1:val1:key2:(a:b):key3'
+    parts = split_on_colon(LINE)
+    assert parts == ['key1', 'val1', 'key2', '(a:b)', 'key3'], f"Got: {parts}"
+    print(f"split_on_colon: {parts}")
+
+    # -- Contains ------------------------------------------------------------
+    print("\n=== Contains ===")
+    has_at = Contains('@')
+    assert has_at.search('user@example.com')
+    assert not has_at.search('nodomain')
+    print("Contains: OK")
+
+    # -- HEX_NUMBER ----------------------------------------------------------
+    print("\n=== HEX_NUMBER ===")
+    assert HEX_NUMBER.search('value is 0xFF')
+    assert HEX_NUMBER.search('0x1A2B3C')
+    assert not HEX_NUMBER.search('0xGG')
+    print("HEX_NUMBER: OK")
+
+    # -- BetweenMatchingBrackets with square brackets -----------------------
+    print("\n=== BetweenMatchingBrackets [] ===")
+    LINE = 'arr[0][1+2]end'
+    assert BetweenMatchingBrackets('[]').findall(LINE) == ['[0]', '[1+2]']
+    print("BetweenMatchingBrackets []: OK")
+
+    # -- BETWEENQUOTES -------------------------------------------------------
+    print("\n=== BETWEENQUOTES ===")
+    hits = [m[0] for m in BETWEENQUOTES.finditer('say "hello" and \'world\'')]
+    assert hits == ['"hello"', "'world'"], f"Got: {hits}"
+    # Mixed quotes do not match
+    assert not BETWEENQUOTES.search('"mismatch\'')
+    print("BETWEENQUOTES: OK")
+
+    # -- as_ / named group via method ----------------------------------------
+    print("\n=== as_ ===")
+    p = OneOrMore(DIGIT).as_('num')
+    m = p.search('port 8080 open')
+    assert m and m.num == '8080'
+    print("as_: OK")
+
+    # -- AtomicGroup does not backtrack -------------------------------------
+    print("\n=== AtomicGroup ===")
+    # Without atomic group, \w+\w matches 'abc' by backtracking.
+    # With atomic group (?>...), the engine can't give back chars.
+    no_match = AtomicGroup(OneOrMore(ALPHANUMERIC)) + OneOrMore(DIGIT)
+    assert not no_match.fullmatch('abc123'), \
+        "AtomicGroup should prevent backtracking, so no match expected"
+    print("AtomicGroup: OK")
+
+    # -- Backref -------------------------------------------------------------
+    print("\n=== Backref ===")
+    quoted = Group('q', AnyOf("'\"")) + OneOrMore(LETTER) + Backref('q')
+    assert quoted.match('"hello"')
+    assert quoted.match("'world'")
+    assert not quoted.match('"mixed\'')
+    print("Backref: OK")
 
     print("\nAll assertions passed.")

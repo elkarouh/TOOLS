@@ -28,8 +28,9 @@ Operators
 from datetime import datetime, timedelta
 from typing import TypeVar, Generic
 
-T = TypeVar('T')
+from rich.traceback import install; install()
 
+T = TypeVar('T')
 
 class Interval:
     """A half-open interval ``[lower, upper)`` over a totally-ordered type.
