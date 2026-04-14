@@ -8,106 +8,10 @@ to several states with a probability — VALUE ITERATION must be used there to f
 a policy (best action in every state).
 """
 
-import heapq
-import itertools
-from collections import deque
 from math import exp, log
 from typing import Any, Generator, Iterable
 
-
-# ---------------------------------------------------------------------------
-# ANY sentinel — matches every value via == (useful as a wildcard end-state)
-# ---------------------------------------------------------------------------
-class _AnyMeta(type):
-    """Metaclass that makes every instance equal to everything."""
-    def __instancecheck__(cls, instance):
-        return True
-
-class _Any(metaclass=_AnyMeta):
-    """Singleton wildcard: ``ANY == x`` is always True."""
-    _instance = None
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
-    def __eq__(self, _other):
-        return True
-    def __hash__(self):
-        return hash("ANY")
-    def __repr__(self):
-        return "ANY"
-
-ANY = _Any()
-ANY=type('',(),{'__eq__':lambda i,_: 1})()
-
-# ---------------------------------------------------------------------------
-# Queue implementations
-# ---------------------------------------------------------------------------
-# class PriorityQueue(list):
-#    def push(self, item):
-#        heapq.heappush(self,  item)
-#    def pop(self):
-#        return heapq.heappop(self)
-#class FifoQueue(list):
-#    def push(self,item):
-#        self.append(item)
-#    def pop(self):
-#        return super(FifoQueue,self).pop(0)
-#class LifoQueue(list):
-#    def push(self,item):
-#        self.append(item)
-
-class PriorityQueue:
-    """Min-heap priority queue. Items must support < comparison on their first element."""
-
-    def __init__(self, items: Iterable = ()):
-        self._counter = itertools.count()   # tie-breaker — avoids comparing paths
-        self._heap: list = []
-        for item in items:
-            self.push(item)
-
-    def push(self, item) -> None:
-        # item[0] is the priority; insert a counter so lists are never compared.
-        heapq.heappush(self._heap, (item[0], next(self._counter), item[1:]))
-
-    def pop(self):
-        priority, _count, rest = heapq.heappop(self._heap)
-        return (priority, *rest)
-
-    def __bool__(self):
-        return bool(self._heap)
-
-
-class FifoQueue:
-    """FIFO queue backed by a deque (O(1) append and popleft)."""
-
-    def __init__(self, items: Iterable = ()):
-        self._dq: deque = deque(items)
-
-    def push(self, item) -> None:
-        self._dq.append(item)
-
-    def pop(self):
-        return self._dq.popleft()
-
-    def __bool__(self):
-        return bool(self._dq)
-
-
-class LifoQueue:
-    """LIFO (stack) queue."""
-
-    def __init__(self, items: Iterable = ()):
-        self._stack: list = list(items)
-
-    def push(self, item) -> None:
-        self._stack.append(item)
-
-    def pop(self):
-        return self._stack.pop()
-
-    def __bool__(self):
-        return bool(self._stack)
+from stdlib import ANY, FifoQueue, LifoQueue, PriorityQueue
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +37,7 @@ class Optimizer:
             CAVEAT: works correctly only when all solutions have the same length.
         """
         self.offset = offset
-        self.decision_path: list = []   # last expanded path — available to get_next_decisions
+        self.decision_path: list = []  # last expanded path — available to get_next_decisions
         self.start_state: Any = None
 
     # ------------------------------------------------------------------
@@ -199,7 +103,7 @@ class Optimizer:
 
         # Fringe: (heuristic_cost, actual_cost, path, state)
         # Storing the state avoids recomputing it on every pop.
-        fringe = PriorityQueue([(0, 0, [], start_state)])
+        fringe = PriorityQueue((0, 0, [], start_state))
         visited: set = set()
 
         while fringe:
@@ -261,7 +165,7 @@ class Optimizer:
         -------
         ``(real_cost, path)`` for the first goal found, or ``[]`` on failure.
         """
-        fringe = fringetype([(0, [], start_state)])
+        fringe = fringetype((0, [], start_state))
         visited: set = set()
 
         while fringe:
@@ -287,7 +191,7 @@ class Optimizer:
                 if next_state not in visited:
                     fringe.push((cost + step_cost, new_path, next_state))
 
-        return []   # fringe exhausted — failure
+        return []  # fringe exhausted — failure
 
     def breadth_first_search(self, start_state: Any):
         """BFS traversal from *start_state*."""
@@ -334,8 +238,8 @@ class Optimizer:
             Must exceed the maximum absolute revenue per step.
         """
         excluded = set(excluded_lengths)
-        fringe = PriorityQueue([(0, [], self.start_state)])
-        visited: dict = {}       # state → best real revenue seen
+        fringe = PriorityQueue((0, [], self.start_state))
+        visited: dict = {}  # state → best real revenue seen
         solution = (0, None)
 
         while fringe:
@@ -361,7 +265,11 @@ class Optimizer:
                 new_cost = cost + cost_step
                 new_real = len(new_path) * offset - new_cost
 
-                penalty = 100_000 if len(new_path) in excluded and next_state == end_state else 0
+                penalty = (
+                    100_000
+                    if len(new_path) in excluded and next_state == end_state
+                    else 0
+                )
                 new_cost += penalty
 
                 prev = visited.get(next_state)
@@ -417,17 +325,16 @@ class Optimizer:
 # EXAMPLES / TESTS
 # ===========================================================================
 if __name__ == "__main__":
-
     # -----------------------------------------------------------------------
     # Example 1 – simple weighted graph (Dijkstra / longest path)
     # -----------------------------------------------------------------------
     class MyOptimizer(Optimizer):
         G = {
-            's': [('u', 10), ('x', 5)],
-            'u': [('v', 1), ('x', 2)],
-            'v': [('y', 4)],
-            'x': [('u', 3), ('v', 9), ('y', 2)],
-            'y': [('s', 7), ('v', 6)],
+            "s": [("u", 10), ("x", 5)],
+            "u": [("v", 1), ("x", 2)],
+            "v": [("y", 4)],
+            "x": [("u", 3), ("v", 9), ("y", 2)],
+            "y": [("s", 7), ("v", 6)],
         }
 
         def get_state(self, past_decisions):
@@ -437,7 +344,7 @@ if __name__ == "__main__":
             return self.G.get(curr_state, [])
 
     op = MyOptimizer()
-    solution = op.longest_path('s', 'v', max_path_length=4)
+    solution = op.longest_path("s", "v", max_path_length=4)
     print("Longest path s→v:", solution)
 
     # -----------------------------------------------------------------------
@@ -445,15 +352,15 @@ if __name__ == "__main__":
     # -----------------------------------------------------------------------
     class MyOptimizer2(Optimizer):
         G = {
-            'a': [('b', 2), ('c', 4), ('d', 3)],
-            'b': [('e', 7), ('f', 4), ('g', 6)],
-            'c': [('e', 3), ('f', 2), ('g', 4)],
-            'd': [('e', 4), ('f', 1), ('g', 5)],
-            'e': [('h', 1), ('i', 4)],
-            'f': [('h', 6), ('i', 3)],
-            'g': [('h', 3), ('i', 3)],
-            'h': [('j', 3)],
-            'i': [('j', 4)],
+            "a": [("b", 2), ("c", 4), ("d", 3)],
+            "b": [("e", 7), ("f", 4), ("g", 6)],
+            "c": [("e", 3), ("f", 2), ("g", 4)],
+            "d": [("e", 4), ("f", 1), ("g", 5)],
+            "e": [("h", 1), ("i", 4)],
+            "f": [("h", 6), ("i", 3)],
+            "g": [("h", 3), ("i", 3)],
+            "h": [("j", 3)],
+            "i": [("j", 4)],
         }
 
         def get_state(self, past_decisions):
@@ -462,12 +369,12 @@ if __name__ == "__main__":
         def get_next_decisions(self, curr_state):
             return self.G.get(curr_state, [])
 
-    print('======= SHORTEST a→j =======')
+    print("======= SHORTEST a→j =======")
     op2 = MyOptimizer2()
-    for solution in op2.shortest_path('a', 'j'):
+    for solution in op2.shortest_path("a", "j"):
         print(solution)
-    print('======= LONGEST  a→j =======')
-    print(op2.longest_path('a', 'j'))
+    print("======= LONGEST  a→j =======")
+    print(op2.longest_path("a", "j"))
 
     # -----------------------------------------------------------------------
     # Example 3 – Rod Cutting
@@ -477,16 +384,16 @@ if __name__ == "__main__":
 
     class RodCutting(Optimizer):
         problem = {
-            'size 1': (1, 1),
-            'size 2': (2, 5),
-            'size 3': (3, 8),
-            'size 4': (4, 9),
-            'size 5': (5, 10),
-            'size 6': (6, 17),
-            'size 7': (7, 17),
-            'size 8': (8, 20),
-            'size 9': (9, 24),
-            'size 10': (10, 30),
+            "size 1": (1, 1),
+            "size 2": (2, 5),
+            "size 3": (3, 8),
+            "size 4": (4, 9),
+            "size 5": (5, 10),
+            "size 6": (6, 17),
+            "size 7": (7, 17),
+            "size 8": (8, 20),
+            "size 9": (9, 24),
+            "size 10": (10, 30),
         }
 
         def get_state(self, past_decisions):
@@ -502,7 +409,7 @@ if __name__ == "__main__":
                 if value[0] <= remaining
             ]
 
-    print('======= ROD CUTTING =======')
+    print("======= ROD CUTTING =======")
     op = RodCutting()
     print(op.longest_path((0, ROD_SIZE), (ANY, 0)))
 
@@ -511,9 +418,14 @@ if __name__ == "__main__":
     # -----------------------------------------------------------------------
     class CapitalBudgeting(Optimizer):
         _choices = {
-            0: {'plant1-p1': (0, 0), 'plant1-p2': (1, 5), 'plant1-p3': (2, 6)},
-            1: {'plant2-p1': (0, 0), 'plant2-p2': (2, 8), 'plant2-p3': (3, 9), 'plant2-p4': (4, 12)},
-            2: {'plant3-p1': (0, 0), 'plant3-p2': (1, 4)},
+            0: {"plant1-p1": (0, 0), "plant1-p2": (1, 5), "plant1-p3": (2, 6)},
+            1: {
+                "plant2-p1": (0, 0),
+                "plant2-p2": (2, 8),
+                "plant2-p3": (3, 9),
+                "plant2-p4": (4, 12),
+            },
+            2: {"plant3-p1": (0, 0), "plant3-p2": (1, 4)},
         }
         _costs = {k: v[0] for stage in _choices.values() for k, v in stage.items()}
 
@@ -526,24 +438,24 @@ if __name__ == "__main__":
             stage, budget = current_state
             choices = self._choices.get(stage, {})
             return [
-                (name, vals[1])
-                for name, vals in choices.items()
-                if vals[0] <= budget
+                (name, vals[1]) for name, vals in choices.items() if vals[0] <= budget
             ]
 
-    print('======= CAPITAL BUDGETING =======')
+    print("======= CAPITAL BUDGETING =======")
     op = CapitalBudgeting()
     print(op.longest_path((0, 5), (3, 0)))
 
     # -----------------------------------------------------------------------
     # Example 5 – Knapsack
     # -----------------------------------------------------------------------
+    MAX_CAP = 5
+
     class Knapsack(Optimizer):
-        items = [('item1', 2, 65), ('item2', 3, 80), ('item3', 1, 30)]
+        items = [("item1", 2, 65), ("item2", 3, 80), ("item3", 1, 30)]
 
         def get_state(self, past_decisions):
             stage = len(past_decisions)
-            remaining = 5
+            remaining = MAX_CAP
             for i, qty in enumerate(past_decisions):
                 remaining -= qty * self.items[i][1]
             return stage, remaining
@@ -560,7 +472,7 @@ if __name__ == "__main__":
                 qty += 1
             return decisions
 
-    print('======= KNAPSACK =======')
+    print("======= KNAPSACK =======")
     op = Knapsack()
     print(op.longest_path((0, 5), (3, 0)))
 
@@ -577,7 +489,7 @@ if __name__ == "__main__":
                 return 6, -1
             age = 0
             for decision in past_decisions:
-                age = age + 1 if decision == 'keep' else 1
+                age = age + 1 if decision == "keep" else 1
             return year, age
 
         def get_next_decisions(self, current_state):
@@ -585,17 +497,19 @@ if __name__ == "__main__":
             if age == -1:
                 return []
             if year == 0:
-                return [('buy', 1000 + self.maintenance_cost[0])]
+                return [("buy", 1000 + self.maintenance_cost[0])]
             if year == 5:
-                return [('sell', -self.market_value[age])]
+                return [("sell", -self.market_value[age])]
             if age == 3:
-                return [('trade', -self.market_value[age] + 1000 + self.maintenance_cost[0])]
+                return [
+                    ("trade", -self.market_value[age] + 1000 + self.maintenance_cost[0])
+                ]
             return [
-                ('keep', self.maintenance_cost[age]),
-                ('trade', -self.market_value[age] + 1000 + self.maintenance_cost[0]),
+                ("keep", self.maintenance_cost[age]),
+                ("trade", -self.market_value[age] + 1000 + self.maintenance_cost[0]),
             ]
 
-    print('======= EQUIPMENT REPLACEMENT =======')
+    print("======= EQUIPMENT REPLACEMENT =======")
     op = EquipmentReplacement(offset=10_000)
     for solution in op.shortest_path((0, 0), (6, -1)):
         print(solution)
@@ -605,33 +519,53 @@ if __name__ == "__main__":
     # -----------------------------------------------------------------------
     class BookMap(Optimizer):
         G = {
-            'arad':      [('sibiu', 140), ('timisoara', 118), ('zerind', 75)],
-            'bucharest': [('giurgiu', 90), ('urzineci', 85), ('fagaras', 211), ('pitesti', 101)],
-            'craiova':   [('rimnicu', 146), ('pitesti', 138), ('drobeta', 120)],
-            'drobeta':   [('craiova', 120), ('mehadia', 75)],
-            'eforie':    [('hirsova', 86)],
-            'fagaras':   [('sibiu', 99), ('bucharest', 211)],
-            'giurgiu':   [('bucharest', 90)],
-            'hirsova':   [('eforie', 86), ('urzineci', 98)],
-            'lasi':      [('neamt', 87), ('vaslui', 92)],
-            'lugoj':     [('mehadia', 70), ('timisoara', 111)],
-            'mehadia':   [('drobeta', 75), ('lugoj', 70)],
-            'neamt':     [('lasi', 87)],
-            'oradea':    [('zerind', 71), ('sibiu', 151)],
-            'pitesti':   [('bucharest', 101), ('rimnicu', 97), ('craiova', 138)],
-            'rimnicu':   [('pitesti', 97), ('sibiu', 80), ('craiova', 146)],
-            'sibiu':     [('rimnicu', 80), ('arad', 140), ('oradea', 151), ('fagaras', 99)],
-            'timisoara': [('lugoj', 111), ('arad', 118)],
-            'urzineci':  [('bucharest', 85), ('vaslui', 142), ('hirsova', 98)],
-            'vaslui':    [('urzineci', 142), ('lasi', 92)],
-            'zerind':    [('arad', 75), ('oradea', 71)],
+            "arad": [("sibiu", 140), ("timisoara", 118), ("zerind", 75)],
+            "bucharest": [
+                ("giurgiu", 90),
+                ("urzineci", 85),
+                ("fagaras", 211),
+                ("pitesti", 101),
+            ],
+            "craiova": [("rimnicu", 146), ("pitesti", 138), ("drobeta", 120)],
+            "drobeta": [("craiova", 120), ("mehadia", 75)],
+            "eforie": [("hirsova", 86)],
+            "fagaras": [("sibiu", 99), ("bucharest", 211)],
+            "giurgiu": [("bucharest", 90)],
+            "hirsova": [("eforie", 86), ("urzineci", 98)],
+            "lasi": [("neamt", 87), ("vaslui", 92)],
+            "lugoj": [("mehadia", 70), ("timisoara", 111)],
+            "mehadia": [("drobeta", 75), ("lugoj", 70)],
+            "neamt": [("lasi", 87)],
+            "oradea": [("zerind", 71), ("sibiu", 151)],
+            "pitesti": [("bucharest", 101), ("rimnicu", 97), ("craiova", 138)],
+            "rimnicu": [("pitesti", 97), ("sibiu", 80), ("craiova", 146)],
+            "sibiu": [("rimnicu", 80), ("arad", 140), ("oradea", 151), ("fagaras", 99)],
+            "timisoara": [("lugoj", 111), ("arad", 118)],
+            "urzineci": [("bucharest", 85), ("vaslui", 142), ("hirsova", 98)],
+            "vaslui": [("urzineci", 142), ("lasi", 92)],
+            "zerind": [("arad", 75), ("oradea", 71)],
         }
         _heuristic = {
-            'arad': 366, 'bucharest': 0, 'craiova': 160, 'drobeta': 242,
-            'eforie': 161, 'fagaras': 176, 'giurgiu': 77, 'hirsova': 151,
-            'lasi': 226, 'lugoj': 244, 'mehadia': 241, 'neamt': 234,
-            'oradea': 380, 'pitesti': 100, 'rimnicu': 193, 'sibiu': 253,
-            'timisoara': 329, 'urzineci': 80, 'vaslui': 199, 'zerind': 374,
+            "arad": 366,
+            "bucharest": 0,
+            "craiova": 160,
+            "drobeta": 242,
+            "eforie": 161,
+            "fagaras": 176,
+            "giurgiu": 77,
+            "hirsova": 151,
+            "lasi": 226,
+            "lugoj": 244,
+            "mehadia": 241,
+            "neamt": 234,
+            "oradea": 380,
+            "pitesti": 100,
+            "rimnicu": 193,
+            "sibiu": 253,
+            "timisoara": 329,
+            "urzineci": 80,
+            "vaslui": 199,
+            "zerind": 374,
         }
 
         def get_state(self, past_decisions):
@@ -647,8 +581,8 @@ if __name__ == "__main__":
                 raise ValueError(f"Unknown city: {city!r}")
 
     op = BookMap()
-    print('======= ROMANIA MAP: oradea → bucharest =======')
-    for solution in op.shortest_path('oradea', 'bucharest'):
+    print("======= ROMANIA MAP: oradea → bucharest =======")
+    for solution in op.shortest_path("oradea", "bucharest"):
         print(solution)
 
     # -----------------------------------------------------------------------
@@ -681,7 +615,7 @@ if __name__ == "__main__":
                 for i in range(j + 1, len(self.series) - nr_seg + 1)
             ]
 
-    print('======= LEAST-SQUARE SEGMENTATION (2 segments) =======')
+    print("======= LEAST-SQUARE SEGMENTATION (2 segments) =======")
     op = LeastSquareSegmenter()
     nr_segments = 2
     for sol in op.shortest_path((nr_segments, 0), (0, ANY)):
@@ -693,8 +627,8 @@ if __name__ == "__main__":
     class BestAlignment(Optimizer):
         def get_state(self, past_decisions):
             s1, s2 = self.start_state
-            len1 = sum(1 for c1, _ in past_decisions if c1 != '=')
-            len2 = sum(1 for _, c2 in past_decisions if c2 != '=')
+            len1 = sum(1 for c1, _ in past_decisions if c1 != "=")
+            len2 = sum(1 for _, c2 in past_decisions if c2 != "=")
             return s1[len1:], s2[len2:]
 
         def get_next_decisions(self, current_state):
@@ -702,20 +636,20 @@ if __name__ == "__main__":
             if not r1 and not r2:
                 return []
             if not r1:
-                return [(('=', r2[0]), 6)]
+                return [(("=", r2[0]), 6)]
             if not r2:
-                return [((r1[0], '='), 6)]
+                return [((r1[0], "="), 6)]
             ch1, ch2 = r1[0], r2[0]
             return [
                 ((ch1, ch2), 0 if ch1 == ch2 else 2),
-                (('=', ch2), 6),
-                ((ch1, '='), 6),
+                (("=", ch2), 6),
+                ((ch1, "="), 6),
             ]
 
-    str1, str2 = 'GAATTCAGTTA', 'GGATCGA'
+    str1, str2 = "GAATTCAGTTA", "GGATCGA"
     op = BestAlignment()
-    print('======= BEST ALIGNMENT =======')
-    for solution in op.shortest_path((str1, str2), ('', '')):
+    print("======= BEST ALIGNMENT =======")
+    for solution in op.shortest_path((str1, str2), ("", "")):
         print(solution)
 
     # -----------------------------------------------------------------------
@@ -732,15 +666,15 @@ if __name__ == "__main__":
 
         def __init__(self):
             super().__init__(offset=1)
-            self.hidden_states = ('Healthy', 'Fever')
-            self.start_p  = {'Healthy': 0.6, 'Fever': 0.4}
-            self.trans_p  = {
-                'Healthy': {'Healthy': 0.7, 'Fever': 0.3},
-                'Fever':   {'Healthy': 0.4, 'Fever': 0.6},
+            self.hidden_states = ("Healthy", "Fever")
+            self.start_p = {"Healthy": 0.6, "Fever": 0.4}
+            self.trans_p = {
+                "Healthy": {"Healthy": 0.7, "Fever": 0.3},
+                "Fever": {"Healthy": 0.4, "Fever": 0.6},
             }
-            self.emit_p   = {
-                'Healthy': {'normal': 0.5, 'cold': 0.4, 'dizzy': 0.1},
-                'Fever':   {'normal': 0.1, 'cold': 0.3, 'dizzy': 0.6},
+            self.emit_p = {
+                "Healthy": {"normal": 0.5, "cold": 0.4, "dizzy": 0.1},
+                "Fever": {"normal": 0.1, "cold": 0.3, "dizzy": 0.6},
             }
 
         def get_state(self, past_decisions):
@@ -754,8 +688,14 @@ if __name__ == "__main__":
                 return []
             obs = self.obs[stage]
             if stage == 0:
-                return [(y, self.start_p[y] * self.emit_p[y][obs]) for y in self.hidden_states]
-            return [(y, self.trans_p[hidden][y] * self.emit_p[y][obs]) for y in self.hidden_states]
+                return [
+                    (y, self.start_p[y] * self.emit_p[y][obs])
+                    for y in self.hidden_states
+                ]
+            return [
+                (y, self.trans_p[hidden][y] * self.emit_p[y][obs])
+                for y in self.hidden_states
+            ]
 
         def cost_operator(self, accumulated, step_prob):
             # Minimise negative log-probability → maximises probability
@@ -773,7 +713,7 @@ if __name__ == "__main__":
             """Yield ``(probability, hidden_state_sequence)`` in decreasing probability order."""
             self.obs = observations
             start = (0, None)
-            end   = (len(observations), ANY)
+            end = (len(observations), ANY)
             for _cost, seq in self.shortest_path(start, end):
                 yield self.get_probability(seq), seq
 
@@ -781,10 +721,15 @@ if __name__ == "__main__":
             """Given the already-decoded optimal sequence, predict the next state/observation."""
             prev = self.optimal_sequence[-1]
             best_prob, best_state, best_obs = 0, None, None
-            for next_obs in ('normal', 'cold', 'dizzy'):
+            for next_obs in ("normal", "cold", "dizzy"):
                 for next_state in self.hidden_states:
-                    prob = self.trans_p[prev][next_state] * self.emit_p[next_state][next_obs]
-                    print(f"  next_obs={next_obs!r}, next_state={next_state!r}, prob={prob:.3g}")
+                    prob = (
+                        self.trans_p[prev][next_state]
+                        * self.emit_p[next_state][next_obs]
+                    )
+                    print(
+                        f"  next_obs={next_obs!r}, next_state={next_state!r}, prob={prob:.3g}"
+                    )
                     if prob > best_prob:
                         best_prob, best_state, best_obs = prob, next_state, next_obs
             return best_state, best_obs
@@ -792,7 +737,7 @@ if __name__ == "__main__":
     print("#" * 50)
     print("HIDDEN MARKOV MODEL")
     print("#" * 50)
-    observations = ('normal', 'cold', 'dizzy')
+    observations = ("normal", "cold", "dizzy")
     print("Observations:", observations)
     hmm = HiddenMarkovModel()
     print("Most probable hidden-state sequences (best first):")
@@ -815,7 +760,7 @@ if __name__ == "__main__":
         Image.Image.__setitem__ = Image.Image.putpixel
 
         def get_black_white(im):
-            im = im.convert('L')
+            im = im.convert("L")
             im = im.point(lambda x: 255 if x < 155 else 0)
             return im.crop(im.getbbox())
 
@@ -824,14 +769,22 @@ if __name__ == "__main__":
             return im.crop(im.getbbox())
 
         def get_neighbours(x, y, xmax, ymax):
-            if y < ymax:                         yield x,     y + 1
-            if y > 0:                            yield x,     y - 1
-            if y > 0 and x < xmax:              yield x + 1, y - 1
-            if x < xmax:                         yield x + 1, y
-            if y < ymax and x < xmax:           yield x + 1, y + 1
-            if x > 0 and y > 0:                 yield x - 1, y - 1
-            if x > 0:                            yield x - 1, y
-            if y < ymax and x > 0:              yield x - 1, y + 1
+            if y < ymax:
+                yield x, y + 1
+            if y > 0:
+                yield x, y - 1
+            if y > 0 and x < xmax:
+                yield x + 1, y - 1
+            if x < xmax:
+                yield x + 1, y
+            if y < ymax and x < xmax:
+                yield x + 1, y + 1
+            if x > 0 and y > 0:
+                yield x - 1, y - 1
+            if x > 0:
+                yield x - 1, y
+            if y < ymax and x > 0:
+                yield x - 1, y + 1
 
         class ImageSeamOptimizer(Optimizer):
             def __init__(self, xmax, ymax, im):
@@ -850,14 +803,20 @@ if __name__ == "__main__":
                 ]
 
             def _left_neighbours(self, x, y):
-                if x > 0 and y > 0:       yield x - 1, y - 1
-                if x > 0:                  yield x - 1, y
-                if x > 0 and y < self.ymax: yield x - 1, y + 1
+                if x > 0 and y > 0:
+                    yield x - 1, y - 1
+                if x > 0:
+                    yield x - 1, y
+                if x > 0 and y < self.ymax:
+                    yield x - 1, y + 1
 
             def _right_neighbours(self, x, y):
-                if y < self.ymax:                      yield x, y + 1
-                if y < self.ymax and x < self.xmax:   yield x + 1, y + 1
-                if y < self.ymax and x > 0:            yield x - 1, y + 1
+                if y < self.ymax:
+                    yield x, y + 1
+                if y < self.ymax and x < self.xmax:
+                    yield x + 1, y + 1
+                if y < self.ymax and x > 0:
+                    yield x - 1, y + 1
 
             def _cost(self, x, y, next_state):
                 xn, yn = next_state
@@ -867,7 +826,9 @@ if __name__ == "__main__":
                 if yn > y:
                     nbrs = [self.im[xp, yp] for xp, yp in self._left_neighbours(xn, yn)]
                 else:
-                    nbrs = [self.im[xp, yp] for xp, yp in self._right_neighbours(xn, yn)]
+                    nbrs = [
+                        self.im[xp, yp] for xp, yp in self._right_neighbours(xn, yn)
+                    ]
                 if nbrs.count(255) > 1:
                     return 1
                 bonus = sum(1 for xp in range(x) if self.im[xp, y] == 255)
@@ -883,7 +844,9 @@ if __name__ == "__main__":
             for x in range(xmax):
                 for y in range(ymax):
                     if im[x, y] == 0:
-                        nbrs = [im[xp, yp] for xp, yp in get_neighbours(x, y, xmax, ymax)]
+                        nbrs = [
+                            im[xp, yp] for xp, yp in get_neighbours(x, y, xmax, ymax)
+                        ]
                         if nbrs.count(255) > 5:
                             im[x, y] = 255
             xstart = 5
@@ -895,39 +858,51 @@ if __name__ == "__main__":
     except ImportError:
         pass  # PIL not available — skip image examples
 
-
     # ---------------------------------------------------------------------------
     # HMM demo
     # ---------------------------------------------------------------------------
     def demo_hmm():
         """Run the HMM Viterbi demo and return the most probable sequence."""
         from math import log
+
         # Inline minimal HMM to avoid dependency on __main__ block
         class _HMM(Optimizer):
             def __init__(self):
                 super().__init__(offset=1)
-                self.hidden_states = ('Healthy', 'Fever')
-                self.start_p  = {'Healthy': 0.6, 'Fever': 0.4}
-                self.trans_p  = {
-                    'Healthy': {'Healthy': 0.7, 'Fever': 0.3},
-                    'Fever':   {'Healthy': 0.4, 'Fever': 0.6},
+                self.hidden_states = ("Healthy", "Fever")
+                self.start_p = {"Healthy": 0.6, "Fever": 0.4}
+                self.trans_p = {
+                    "Healthy": {"Healthy": 0.7, "Fever": 0.3},
+                    "Fever": {"Healthy": 0.4, "Fever": 0.6},
                 }
-                self.emit_p   = {
-                    'Healthy': {'normal': 0.5, 'cold': 0.4, 'dizzy': 0.1},
-                    'Fever':   {'normal': 0.1, 'cold': 0.3, 'dizzy': 0.6},
+                self.emit_p = {
+                    "Healthy": {"normal": 0.5, "cold": 0.4, "dizzy": 0.1},
+                    "Fever": {"normal": 0.1, "cold": 0.3, "dizzy": 0.6},
                 }
+
             def get_state(self, past_decisions):
-                if not past_decisions: return 0, None
+                if not past_decisions:
+                    return 0, None
                 return len(past_decisions), past_decisions[-1]
+
             def get_next_decisions(self, current_state):
                 stage, hidden = current_state
-                if stage == len(self.obs): return []
+                if stage == len(self.obs):
+                    return []
                 o = self.obs[stage]
                 if stage == 0:
-                    return [(y, self.start_p[y] * self.emit_p[y][o]) for y in self.hidden_states]
-                return [(y, self.trans_p[hidden][y] * self.emit_p[y][o]) for y in self.hidden_states]
+                    return [
+                        (y, self.start_p[y] * self.emit_p[y][o])
+                        for y in self.hidden_states
+                    ]
+                return [
+                    (y, self.trans_p[hidden][y] * self.emit_p[y][o])
+                    for y in self.hidden_states
+                ]
+
             def cost_operator(self, acc, p):
                 return acc + log(self.offset / p)
+
             def get_probability(self, seq):
                 prob = self.start_p[seq[0]] * self.emit_p[seq[0]][self.obs[0]]
                 for prev, curr, o in zip(seq, seq[1:], self.obs[1:]):
@@ -935,7 +910,7 @@ if __name__ == "__main__":
                 return prob
 
         hmm = _HMM()
-        obs = ('normal', 'cold', 'dizzy')
+        obs = ("normal", "cold", "dizzy")
         hmm.obs = obs
         first = next(hmm.shortest_path((0, None), (len(obs), ANY)))
         return hmm.get_probability(first[1]), first[1]
