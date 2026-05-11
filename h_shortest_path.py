@@ -248,23 +248,14 @@ class Optimizer:
         best_revenue: float | None = None
         best_path: list | None = None
 
-        # Fringe: (-revenue, path_length, path, state).
+        # Fringe: (-revenue, path_length, path, state, path_states).
         # Negating revenue lets PriorityQueue (min-heap) act as a max-heap.
-        fringe = PriorityQueue((0, 0, [], start_state))
-
-        # visited[(state, path_length)] → best revenue seen so far.
-        # Prune any revisit that cannot improve on the recorded revenue.
-        visited: dict[tuple, float] = {}
-        NEG_INF = float("-inf")
+        # path_states tracks the set of states on the current path to prevent cycles.
+        fringe = PriorityQueue((0, 0, [], start_state, frozenset([start_state])))
 
         while fringe:
-            neg_rev, path_length, path, current_state = fringe.pop()
+            neg_rev, path_length, path, current_state, path_states = fringe.pop()
             revenue = -neg_rev
-
-            key = (current_state, path_length)
-            if visited.get(key, NEG_INF) >= revenue:
-                continue
-            visited[key] = revenue
 
             if current_state == end_state and path_length > 0:
                 if best_revenue is None or revenue > best_revenue:
@@ -274,10 +265,11 @@ class Optimizer:
                 for new_decision, step_rev in self.get_next_decisions(current_state):
                     new_path = path + [new_decision]
                     next_state = self.get_state(new_path)
+                    if next_state in path_states:
+                        continue  # prevent cycles: don't revisit a state already on this path
                     new_rev = revenue + step_rev
                     new_len = path_length + 1
-                    if visited.get((next_state, new_len), NEG_INF) < new_rev:
-                        fringe.push((-new_rev, new_len, new_path, next_state))
+                    fringe.push((-new_rev, new_len, new_path, next_state, path_states | {next_state}))
 
         if best_path is None:
             return 0, None
